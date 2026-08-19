@@ -1,0 +1,29 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Raw and processed data
+data/raw/*.csv
+data/processed/*.csv
+
+# MLflow
+mlruns/
+
+# Environment variables / secrets
+.env
+.env.*
+
+# IDE / system files
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+*.log
