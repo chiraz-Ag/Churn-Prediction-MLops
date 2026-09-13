@@ -1,0 +1,33 @@
+# Version control
+.git/
+.gitignore
+
+# Python
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Notebooks and exploration — not needed at runtime, only src/ and models/ are
+notebooks/
+
+# Data — the API never reads raw/processed CSVs directly, only the saved
+# model/encoder artifacts under models/
+data/
+
+# MLflow local tracking — not needed at runtime; best_model.joblib under
+# models/ is what the API actually loads
+mlflow.db
+mlruns/
+notebooks/mlruns/
+
+# Tests — not needed inside the runtime image
+tests/
+
+# Editor/OS
+.vscode/
+.DS_Store
+
+# Planning/docs
+*.xlsx
+README.md

@@ -1,0 +1,21 @@
+# Runtime dependencies for the FastAPI serving layer ONLY.
+# Training/notebook/tracking dependencies (jupyter, mlflow, matplotlib,
+# seaborn...) live in the main requirements.txt and are intentionally
+# excluded here — the API never opens a notebook or logs to MLflow, it
+# just loads a saved model and serves predictions.
+#
+# Versions should match what's installed locally where the model was
+# trained (see `pip show <package>`), so unpickling the model behaves
+# identically inside the container.
+
+fastapi==0.141.1
+uvicorn==0.52.4
+pydantic==2.13.4
+
+pandas==3.0.5
+numpy==2.5.2
+joblib==1.5.3
+
+scikit-learn==1.7.1
+xgboost==3.4.1
+lightgbm==4.7.0
