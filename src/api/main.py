@@ -12,12 +12,13 @@ Run locally with:
 """
 
 import os
+from typing import Literal
+
 import joblib
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Paths — resolved relative to this file, not the current working directory,
@@ -74,6 +75,31 @@ def load_artifacts():
 # Request schema — one customer's raw attributes, validated by Pydantic.
 # Field names/types mirror the original Telco dataset columns (pre-encoding).
 # ---------------------------------------------------------------------------
+# Kept as a module-level constant (not a class attribute) so it's not a
+# mutable default value living directly in the class body.
+EXAMPLE_CUSTOMER = {
+    "gender": "Female",
+    "SeniorCitizen": 0,
+    "Partner": "Yes",
+    "Dependents": "No",
+    "tenure": 1,
+    "PhoneService": "No",
+    "MultipleLines": "No phone service",
+    "InternetService": "DSL",
+    "OnlineSecurity": "No",
+    "OnlineBackup": "Yes",
+    "DeviceProtection": "No",
+    "TechSupport": "No",
+    "StreamingTV": "No",
+    "StreamingMovies": "No",
+    "Contract": "Month-to-month",
+    "PaperlessBilling": "Yes",
+    "PaymentMethod": "Electronic check",
+    "MonthlyCharges": 29.85,
+    "TotalCharges": 29.85,
+}
+
+
 class CustomerInput(BaseModel):
     gender: Literal["Male", "Female"]
     SeniorCitizen: Literal[0, 1]
@@ -98,31 +124,7 @@ class CustomerInput(BaseModel):
     MonthlyCharges: float = Field(..., ge=0)
     TotalCharges: float = Field(..., ge=0)
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "gender": "Female",
-                "SeniorCitizen": 0,
-                "Partner": "Yes",
-                "Dependents": "No",
-                "tenure": 1,
-                "PhoneService": "No",
-                "MultipleLines": "No phone service",
-                "InternetService": "DSL",
-                "OnlineSecurity": "No",
-                "OnlineBackup": "Yes",
-                "DeviceProtection": "No",
-                "TechSupport": "No",
-                "StreamingTV": "No",
-                "StreamingMovies": "No",
-                "Contract": "Month-to-month",
-                "PaperlessBilling": "Yes",
-                "PaymentMethod": "Electronic check",
-                "MonthlyCharges": 29.85,
-                "TotalCharges": 29.85,
-            }
-        }
-
+    model_config = ConfigDict(json_schema_extra={"example": EXAMPLE_CUSTOMER})
 
 class PredictionResponse(BaseModel):
     churn_prediction: Literal["Yes", "No"]
@@ -223,4 +225,7 @@ def predict(customer: CustomerInput):
             risk_level=risk_level_from_probability(probability),
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Prediction failed: {e}")
+        # Intentional catch-all at the API boundary: any failure in feature
+        # engineering, encoding, or the model itself becomes a clean 400
+        # for the client, not a raw 500 with an internal stack trace.
+        raise HTTPException(status_code=400, detail=f"Prediction failed: {e}") from e
