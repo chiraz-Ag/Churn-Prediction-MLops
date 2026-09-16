@@ -17,7 +17,6 @@ from fastapi.testclient import TestClient
 
 from src.api.main import app
 
-
 VALID_CUSTOMER = {
     "gender": "Female",
     "SeniorCitizen": 0,
