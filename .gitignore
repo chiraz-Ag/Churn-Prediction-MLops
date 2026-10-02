@@ -27,4 +27,6 @@ mlflow.db
 .DS_Store
 
 # Logs
-*.loggit
+logs/
+*.log
+monitoring/reports/

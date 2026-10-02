@@ -6,12 +6,19 @@ data_prep.ipynb, and exposes:
   - GET  /health   basic liveness check
   - POST /predict  churn probability + prediction for one customer
 
+Every successful /predict call is also logged to logs/predictions.csv
+(raw input + prediction + probability + UTC timestamp). This log is used
+later by monitoring/drift_report.py to compare live traffic against the
+training data distribution (data drift detection with Evidently).
+
 Run locally with:
     uvicorn src.api.main:app --reload
 (run from the repo root so the relative MODEL_DIR path resolves correctly)
 """
 
+import csv
 import os
+from datetime import datetime, timezone
 from typing import Literal
 
 import joblib
@@ -27,12 +34,14 @@ from pydantic import BaseModel, ConfigDict, Field
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(BASE_DIR, "..", ".."))
 MODELS_DIR = os.path.join(REPO_ROOT, "models")
+LOGS_DIR = os.path.join(REPO_ROOT, "logs")
 
 MODEL_PATH = os.path.join(MODELS_DIR, "best_model.joblib")
 ENCODER_PATH = os.path.join(MODELS_DIR, "encoder.joblib")
 FEATURE_COLUMNS_PATH = os.path.join(MODELS_DIR, "feature_columns.joblib")
 CATEGORICAL_COLS_PATH = os.path.join(MODELS_DIR, "categorical_cols.joblib")
 NUMERIC_COLS_PATH = os.path.join(MODELS_DIR, "numeric_cols.joblib")
+PREDICTIONS_LOG_PATH = os.path.join(LOGS_DIR, "predictions.csv")
 
 # ---------------------------------------------------------------------------
 # Load model + preprocessing artifacts ONCE at startup, not per-request —
@@ -70,6 +79,10 @@ def load_artifacts():
     categorical_cols = joblib.load(CATEGORICAL_COLS_PATH)
     numeric_cols = joblib.load(NUMERIC_COLS_PATH)
 
+    # Make sure the logs/ folder exists before any request tries to write
+    # to it. exist_ok=True means this is a no-op if it's already there.
+    os.makedirs(LOGS_DIR, exist_ok=True)
+
 
 # ---------------------------------------------------------------------------
 # Request schema — one customer's raw attributes, validated by Pydantic.
@@ -98,6 +111,12 @@ EXAMPLE_CUSTOMER = {
     "MonthlyCharges": 29.85,
     "TotalCharges": 29.85,
 }
+
+# Column order used for logs/predictions.csv. Fixed explicitly (rather than
+# relying on dict order) so the CSV header never silently changes shape.
+LOG_FIELDNAMES = (
+    ["timestamp"] + list(EXAMPLE_CUSTOMER.keys()) + ["churn_prediction", "churn_probability"]
+)
 
 
 class CustomerInput(BaseModel):
@@ -159,7 +178,14 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def encode_and_align(df: pd.DataFrame) -> pd.DataFrame:
-    binary_cols = [c for c in df.columns if set(df[c].dropna().unique()) <= {"Yes", "No"}]
+    # Only consider columns NOT handled by the one-hot encoder as binary
+    # candidates. Without this exclusion, a single-row request can
+    # misclassify a true multi-category column (e.g. OnlineSecurity, which
+    # can be "Yes"/"No"/"No internet service") as binary just because this
+    # particular row happens to hold only "Yes" or "No" — corrupting the
+    # encoder input for that column.
+    binary_candidates = [c for c in df.columns if c not in categorical_cols]
+    binary_cols = [c for c in binary_candidates if set(df[c].dropna().unique()) <= {"Yes", "No"}]
     for col in binary_cols:
         df[col] = df[col].map({"Yes": 1, "No": 0})
 
@@ -195,6 +221,31 @@ def risk_level_from_probability(p: float) -> str:
     return "High"
 
 
+def log_prediction(raw_customer: dict, prediction: str, probability: float) -> None:
+    """Append one row to logs/predictions.csv: raw input + result + UTC timestamp.
+
+    Writes the header only if the file doesn't exist yet. Any failure here
+    (e.g. disk full, permissions) is swallowed on purpose — logging must
+    never break a prediction response for the client.
+    """
+    try:
+        file_exists = os.path.exists(PREDICTIONS_LOG_PATH)
+        row = {"timestamp": datetime.now(timezone.utc).isoformat()}
+        row.update(raw_customer)
+        row["churn_prediction"] = prediction
+        row["churn_probability"] = probability
+
+        with open(PREDICTIONS_LOG_PATH, mode="a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=LOG_FIELDNAMES)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(row)
+    except Exception as e:
+        # Deliberately not re-raised: a logging failure should never cause
+        # a 500 on an otherwise-successful prediction.
+        print(f"[log_prediction] Failed to write prediction log: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -212,12 +263,15 @@ def predict(customer: CustomerInput):
         raise HTTPException(status_code=503, detail="Model not loaded yet.")
 
     try:
-        raw_df = pd.DataFrame([customer.model_dump()])
+        raw_dict = customer.model_dump()
+        raw_df = pd.DataFrame([raw_dict])
         engineered = engineer_features(raw_df)
         X = encode_and_align(engineered)
 
         probability = float(model.predict_proba(X)[0, 1])
         prediction = "Yes" if probability >= 0.5 else "No"
+
+        log_prediction(raw_dict, prediction, round(probability, 4))
 
         return PredictionResponse(
             churn_prediction=prediction,
