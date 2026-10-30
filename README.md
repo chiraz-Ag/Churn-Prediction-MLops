@@ -1,22 +1,100 @@
 # ChurnGuard AI — Customer Churn Prediction with MLOps
 
-A churn prediction system for telecom customers, built as an end-to-end MLOps portfolio project: from data exploration to a served, monitored API with automated CI/CD.
+[![CI](https://github.com/chiraz-Ag/Churn-Prediction-MLops/actions/workflows/ci.yml/badge.svg)](https://github.com/chiraz-Ag/Churn-Prediction-MLops/actions/workflows/ci.yml)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-F7931E?logo=scikitlearn&logoColor=white)
+![Evidently](https://img.shields.io/badge/Evidently%20AI-monitoring-red)
 
-Dataset: [IBM Telco Customer Churn](https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv)
+A churn prediction project where I built the full pipeline around the model: data preparation, a FastAPI service, automated CI/CD, cloud deployment and data drift monitoring.
+
+**Try it live:** [`/health`](https://churnguard-api-fj06.onrender.com/health) · **Dataset:** [IBM Telco Customer Churn](https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv) (7,043 customers)
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A["Raw Telco data"] --> B["EDA and cleaning"]
+    B --> C["Feature engineering + OneHotEncoder"]
+    C --> D["Model training"]
+    D --> E[("models/ artifacts")]
+    E --> F["FastAPI service"]
+    F -->|"POST /predict"| G["Client"]
+    F -->|"log every request"| H[("logs/predictions.csv")]
+    H --> I["Evidently drift report"]
+    R[("Reference dataset")] --> I
+    H --> J["Streamlit dashboard"]
+    I --> J
+```
+
+CI/CD: every push runs `lint (ruff)` → `test (pytest)` → `build (docker)` on GitHub Actions. The API is containerized and deployed on Render.
 
 ---
 
 ## Features
 
-- **Exploratory Data Analysis** — data cleaning, duplicate removal, outlier handling, statistical tests (Chi², t-test)
-- **Feature engineering** — tenure buckets, service counts, derived ratios, OneHotEncoder fitted on train data only
-- **Model serving** — FastAPI REST API with Pydantic request/response validation
-- **Automated testing** — pytest suite for the API and preprocessing logic
-- **Containerization** — multi-stage, non-root Dockerfile with healthcheck
-- **CI/CD** — GitHub Actions pipeline (lint → test → build)
-- **Cloud deployment** — hosted on Render
-- **Monitoring & drift detection** — prediction logging + automated data drift reports with Evidently AI
-- **Interactive dashboard** — Streamlit dashboard for live monitoring
+- **Exploratory Data Analysis**: data cleaning, duplicate removal, outlier handling, statistical tests (Chi², t-test)
+- **Feature engineering**: tenure buckets, service counts, derived ratios, OneHotEncoder fitted on the training set only
+- **Model serving**: FastAPI REST API with strict Pydantic request/response validation
+- **Automated testing**: pytest suite for the API and the preprocessing logic
+- **Containerization**: multi-stage, non-root Dockerfile with a healthcheck
+- **CI/CD**: GitHub Actions pipeline (lint → test → build)
+- **Cloud deployment**: hosted on Render
+- **Monitoring**: every prediction is logged, and Evidently AI generates data drift reports
+- **Dashboard**: Streamlit dashboard for live monitoring
+
+---
+
+## API
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | GET | Liveness check, returns the loaded model type |
+| `/predict` | POST | Churn probability, prediction and risk level for one customer |
+
+Try the live API:
+
+```bash
+curl -X POST "https://churnguard-api-fj06.onrender.com/predict" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "gender": "Female", "SeniorCitizen": 0, "Partner": "Yes", "Dependents": "No",
+    "tenure": 1, "PhoneService": "No", "MultipleLines": "No phone service",
+    "InternetService": "DSL", "OnlineSecurity": "No", "OnlineBackup": "Yes",
+    "DeviceProtection": "No", "TechSupport": "No", "StreamingTV": "No",
+    "StreamingMovies": "No", "Contract": "Month-to-month", "PaperlessBilling": "Yes",
+    "PaymentMethod": "Electronic check", "MonthlyCharges": 29.85, "TotalCharges": 29.85
+  }'
+```
+
+Example response:
+
+```json
+{
+  "churn_prediction": "Yes",
+  "churn_probability": 0.7898,
+  "risk_level": "High"
+}
+```
+
+`churn_prediction` is `Yes` when the probability is at least 0.5. `risk_level` is `Low` below 0.33, `Medium` below 0.66, and `High` above.
+
+> If the service runs on a free Render plan, the first request after a period of inactivity may take a while while the container wakes up.
+
+---
+
+## Design decisions
+
+- **No train/serve skew.** The API reuses the exact feature engineering of the data preparation notebook and the same fitted encoder, so the model receives data shaped like its training data.
+- **No data leakage.** The OneHotEncoder is fitted on the training split only.
+- **Fail fast at startup.** Model and encoder artifacts are loaded once when the server starts. If one is missing, the API stops with an explicit error listing the missing files.
+- **Validation at the boundary.** Categorical fields are typed with `Literal`, so an unknown category is rejected with a 422 before it can reach the model.
+- **Logging never breaks a prediction.** If writing to the log fails, the client still gets its prediction.
+- **Drift detection that adapts.** Evidently automatically selects the statistical test per column (type and sample size), and the report script warns when fewer than 30 predictions are logged, because the result would not be reliable.
+
+**Engineering note.** While building the monitoring, I found a bug in the encoding step: binary columns were detected from the values of a single request, so a multi-category column such as `OnlineSecurity` could be wrongly treated as Yes/No. The encoder then received unseen values and silently encoded them as zeros. Columns handled by the encoder are now excluded from that detection, and the predictions changed accordingly.
 
 ---
 
@@ -24,9 +102,11 @@ Dataset: [IBM Telco Customer Churn](https://raw.githubusercontent.com/IBM/telco-
 
 ```
 Churn-Prediction-MLops/
+├── .github/workflows/ci.yml          # Lint, test, build pipeline
 ├── notebooks/
 │   ├── eda_churnguard_v2.ipynb       # Data cleaning, EDA, statistical tests
-│   └── data_prep.ipynb               # Feature engineering, encoding, train/test split
+│   ├── data_prep.ipynb               # Feature engineering, encoding, train/test split
+│   └── train_churnguard.ipynb        # Model training
 ├── src/
 │   └── api/
 │       └── main.py                   # FastAPI app: /health, /predict, prediction logging
@@ -38,12 +118,13 @@ Churn-Prediction-MLops/
 │   ├── drift_report.py               # Compares live predictions vs. reference with Evidently
 │   ├── populate_test_logs.py         # Sends randomized requests to populate logs for testing
 │   └── dashboard.py                  # Streamlit monitoring dashboard
-├── models/                           # Trained model + preprocessing artifacts (gitignored)
-├── data/                             # Raw & processed datasets (gitignored)
+├── models/                           # Trained model + preprocessing artifacts
+├── data/                             # Datasets (CSV files are gitignored)
 ├── logs/                             # Live prediction logs (gitignored, created at runtime)
 ├── Dockerfile
-├── .github/workflows/ci.yml          # Lint, test, build pipeline
-└── requirements.txt
+├── pytest.ini
+├── requirements.txt                  # Full development dependencies
+└── requirements-api.txt              # Slim dependencies for the API / Docker image
 ```
 
 ---
@@ -64,9 +145,9 @@ pip install -r requirements.txt
 ### 2. Prepare the data and train a model
 
 Run, in order:
-1. `notebooks/eda_churnguard_v2.ipynb` — produces `data/processed/telco_churn_cleaned.csv`
-2. `notebooks/data_prep.ipynb` — produces the train/test splits and the encoder/feature artifacts in `models/`
-3. Your training notebook/script — produces `models/best_model.joblib`
+1. `notebooks/eda_churnguard_v2.ipynb`: produces `data/processed/telco_churn_cleaned.csv`
+2. `notebooks/data_prep.ipynb`: produces the train/test splits and the encoder/feature artifacts in `models/`
+3. `notebooks/train_churnguard.ipynb`: produces `models/best_model.joblib`
 
 ### 3. Run the API locally
 
@@ -74,38 +155,16 @@ Run, in order:
 uvicorn src.api.main:app --reload
 ```
 
-- Interactive docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-- Health check: `GET /health`
-- Prediction: `POST /predict`
+Interactive docs (Swagger UI): [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
-Example request body:
-```json
-{
-  "gender": "Female",
-  "SeniorCitizen": 0,
-  "Partner": "Yes",
-  "Dependents": "No",
-  "tenure": 1,
-  "PhoneService": "No",
-  "MultipleLines": "No phone service",
-  "InternetService": "DSL",
-  "OnlineSecurity": "No",
-  "OnlineBackup": "Yes",
-  "DeviceProtection": "No",
-  "TechSupport": "No",
-  "StreamingTV": "No",
-  "StreamingMovies": "No",
-  "Contract": "Month-to-month",
-  "PaperlessBilling": "Yes",
-  "PaymentMethod": "Electronic check",
-  "MonthlyCharges": 29.85,
-  "TotalCharges": 29.85
-}
+### 4. Run with Docker
+
+```bash
+docker build -t churnguard-api .
+docker run -p 8000:8000 churnguard-api
 ```
 
-Every successful call to `/predict` is also logged to `logs/predictions.csv` (raw input + prediction + probability + UTC timestamp), which feeds the monitoring pipeline below.
-
-### 4. Run the tests
+### 5. Run the tests
 
 ```bash
 pytest
@@ -113,9 +172,9 @@ pytest
 
 ---
 
-## Monitoring & drift detection
+## Monitoring and drift detection
 
-This project tracks whether live traffic still resembles the data the model was trained on, using [Evidently AI](https://www.evidentlyai.com/).
+The monitoring answers one question: does live traffic still look like the data the model was trained on?
 
 ```bash
 # 1. Build the reference dataset (the historical customer population)
@@ -129,41 +188,27 @@ python monitoring/drift_report.py
 # -> writes monitoring/reports/drift_report.html
 ```
 
-### Live dashboard
+Live dashboard (prediction volume, churn rate, probability distribution, and a button to regenerate the drift report):
 
 ```bash
 streamlit run monitoring/dashboard.py
 ```
 
-Shows prediction volume, churn rate, probability distribution, and lets you regenerate the drift report from the browser.
-
 ---
 
-## CI/CD
+## Known limitations and roadmap
 
-Every push triggers a GitHub Actions pipeline (`.github/workflows/ci.yml`):
-
-1. **Lint** — `ruff`
-2. **Test** — `pytest`
-3. **Build** — `docker build` (image build only, not pushed to a registry)
-
-## Deployment
-
-The API is containerized and deployed on [Render](https://render.com).
-
-- **Live API**: https://churnguard-api-fj06.onrender.com
-- **Health check**: https://churnguard-api-fj06.onrender.com/health
-
-> If the service is hosted on a free Render plan, the first request after a period of inactivity may take a while to respond while the container wakes up.
+- **Persistent logging.** Predictions are logged to a CSV file, which is fine locally but not durable on a container platform. Next step: a database or object storage.
+- **Continuous deployment.** The pipeline builds the Docker image but does not push it to a registry. Next step: publish the image and deploy automatically from CI.
+- **Automated drift checks.** Drift reports are generated on demand. Next step: run them on a schedule and alert when too many columns drift.
+- **Retraining.** Retraining is manual. Next step: trigger it when drift or performance degradation is detected.
+- **API hardening.** Next step: authentication and rate limiting.
 
 ---
 
 ## Tech stack
 
-Python · FastAPI · scikit-learn · pandas · Evidently AI · Streamlit · Docker · GitHub Actions · pytest · ruff
+Python · FastAPI · Pydantic · scikit-learn · pandas · Evidently AI · Streamlit · Docker · GitHub Actions · pytest · ruff · Render
 
 ---
 
-## Contributors
-
-Built as a two-person portfolio project.
