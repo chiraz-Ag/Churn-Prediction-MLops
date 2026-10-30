@@ -29,6 +29,32 @@ DRIFT_SCRIPT_PATH = os.path.join(REPO_ROOT, "monitoring", "drift_report.py")
 st.set_page_config(page_title="ChurnGuard AI — Monitoring", layout="wide")
 st.title("ChurnGuard AI — Monitoring Dashboard")
 
+with st.expander("💡 Comment fonctionne ce système ?", expanded=False):
+    st.markdown(
+        """
+        **Le pipeline, étape par étape :**
+
+        1. **L'API** (`uvicorn`, terminal séparé) tourne en continu et reçoit des
+           requêtes sur `/predict`.
+        2. À chaque requête, l'API calcule la prédiction **et** ajoute une ligne
+           dans `logs/predictions.csv` (données du client + résultat + date).
+        3. **Ce dashboard** lit `logs/predictions.csv` à chaque rafraîchissement
+           de la page et affiche les statistiques ci-dessous — il ne se met
+           **pas** à jour tout seul, il faut recharger la page (F5) après de
+           nouvelles prédictions.
+        4. **Le rapport de drift** (en bas de page) compare `logs/predictions.csv`
+           (clients récents) à `data/processed/X_train_raw.csv` (les 7043
+           clients historiques sur lesquels le modèle a été entraîné), pour
+           détecter si le profil des nouveaux clients s'éloigne de ce que le
+           modèle connaît.
+
+        **Pour que ce dashboard reste accessible**, le terminal où tu as lancé
+        `streamlit run monitoring\\dashboard.py` doit rester ouvert et inutilisé
+        (comme celui de l'API) — utilise un *autre* terminal pour toute autre
+        commande (`populate_test_logs.py`, `git`, etc.).
+        """
+    )
+
 
 @st.cache_data(ttl=10)
 def load_predictions() -> pd.DataFrame | None:
@@ -118,6 +144,7 @@ if st.button("Generate / refresh drift report", type="primary"):
         result = subprocess.run(
             [sys.executable, DRIFT_SCRIPT_PATH],
             cwd=REPO_ROOT,
+            check=False,
             capture_output=True,
             text=True,
         )

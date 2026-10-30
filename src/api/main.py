@@ -18,7 +18,7 @@ Run locally with:
 
 import csv
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Literal
 
 import joblib
@@ -230,7 +230,7 @@ def log_prediction(raw_customer: dict, prediction: str, probability: float) -> N
     """
     try:
         file_exists = os.path.exists(PREDICTIONS_LOG_PATH)
-        row = {"timestamp": datetime.now(timezone.utc).isoformat()}
+        row = {"timestamp": datetime.now(UTC).isoformat()}
         row.update(raw_customer)
         row["churn_prediction"] = prediction
         row["churn_probability"] = probability
@@ -240,7 +240,7 @@ def log_prediction(raw_customer: dict, prediction: str, probability: float) -> N
             if not file_exists:
                 writer.writeheader()
             writer.writerow(row)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # Deliberately not re-raised: a logging failure should never cause
         # a 500 on an otherwise-successful prediction.
         print(f"[log_prediction] Failed to write prediction log: {e}")
